@@ -1,4 +1,6 @@
 const axios = require("axios");
+const { distanceInWordsStrict } = require("date-fns");
+const numbers = require("numbers");
 const supportedPairs = require("./supportedPairs").supportedPairs;
 const { OANDA_API_KEY, ACCOUNT_ID } = require("./.secrets/secrets");
 
@@ -16,7 +18,6 @@ class ForexWatcher {
 
   buy(item, key) {
     this.lastAction = `BUY ${key} at ${item.rates[0]}`;
-    this.moneySpent += item.rates[0];
     return 0;
   }
 
@@ -24,16 +25,31 @@ class ForexWatcher {
     let total = item.rates[0] - item.startVal;
     item.startVal = item.rates[0];
     this.lastAction = `SELL ${key} at ${item.rates[0]} for ${total}`;
-    this.moneySpent += total;
     return total;
+  }
+
+  changeRandom(price) {
+    return (
+      parseFloat(price) +
+      Math.floor(Math.random() * 10 + 100) / 1000
+    ).toFixed(5);
   }
 
   async main() {
     let rootUrl = "https://api-fxpractice.oanda.com";
     let url = `${rootUrl}/v3/accounts/${ACCOUNT_ID}/pricing`;
+    let accountUrl = `${rootUrl}/v3/accounts/${ACCOUNT_ID}/summary`;
     let Authorization = `Bearer ${OANDA_API_KEY}`;
+    let startTime = new Date();
+
+    // try and guess here while we calc this
+    const accountRes = await axios.get(accountUrl, {
+      headers: { Authorization }
+    });
+    this.balance = accountRes.data.account.balance;
+
     const pairs = supportedPairs
-      .slice(0, 3)
+      .slice(0, 6)
       .map(p => p.substring(0, 3) + "_" + p.substring(3))
       .join(",");
     try {
@@ -43,19 +59,30 @@ class ForexWatcher {
           params: { instruments: pairs },
           headers: { Authorization }
         });
+
         let rates = res.data.prices.map(r => ({
           time: r.time,
-          closeoutBid: r.closeoutBid,
+          asks: r.asks,
+          bids: r.bids,
           name: r.instrument
         }));
 
         console.clear();
         for (let r of rates) {
-          console.log(`${r.name}, close bid: ${r.closeoutBid}`);
+          console.log(
+            `${r.name}, last ask: ${this.changeRandom(
+              r.asks[0].price
+            )}, last bid: ${this.changeRandom(r.bids[0].price)}`
+          );
         }
-        console.time("refreshing");
+        console.log("Balance", balance);
+        // console.time("refreshing");
         await sleep(20);
-        console.timeEnd("refreshing");
+        // console.timeEnd("refreshing");
+        console.log(
+          "ELAPSED TIME",
+          distanceInWordsStrict(new Date(), startTime)
+        );
       }
     } catch (e) {
       console.log(e);
