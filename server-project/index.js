@@ -17,15 +17,11 @@ class ForexWatcher {
   }
 
   buy(item, key) {
-    this.lastAction = `BUY ${key} at ${item.rates[0]}`;
-    return 0;
+    // asking price
   }
 
   sell(item) {
-    let total = item.rates[0] - item.startVal;
-    item.startVal = item.rates[0];
-    this.lastAction = `SELL ${key} at ${item.rates[0]} for ${total}`;
-    return total;
+    // selling price
   }
 
   changeRandom(price) {
@@ -33,6 +29,29 @@ class ForexWatcher {
       parseFloat(price) +
       Math.floor(Math.random() * 10 + 100) / 1000
     ).toFixed(5);
+  }
+
+  figureOutBuy(name, startAsk, asks) {
+    let diffChange = 0;
+    if (asks.length >= 2) {
+      diffChange = (startAsk.price - asks[0].price) / 0.0001;
+    }
+    console.log(`   ${name} ask change: ${diffChange.toFixed(2)}`);
+  }
+
+  figureOutSell(name, startBid, bids) {
+    let diffChange = 0;
+    if (bids.length >= 2) {
+      diffChange = (startBid.price - bids[0].price) / 0.0001;
+    }
+    console.log(`   ${name} bid change: ${diffChange.toFixed(2)}`);
+  }
+
+  getAcceleration(items) {
+    let prices = items.map(c => parseFloat(c.price));
+    let mean = numbers.statistic.mean(prices);
+    // console.log("PRICES", prices, mean, prices.map(c => (c - mean) / 0.0001));
+    return prices.map(c => (c - mean) / 0.0001);
   }
 
   async main() {
@@ -54,6 +73,7 @@ class ForexWatcher {
       .join(",");
     try {
       let count = 1000;
+      let currentRates = {};
       while (count--) {
         const res = await axios.get(url, {
           params: { instruments: pairs },
@@ -61,142 +81,69 @@ class ForexWatcher {
         });
 
         let rates = res.data.prices.map(r => ({
+          ...r,
           time: r.time,
-          asks: r.asks,
-          bids: r.bids,
+          asks: r.asks.map(c => ({ ...c, c: c.price })),
+          bids: r.bids.map(c => ({ ...c, c: c.price })),
           name: r.instrument
         }));
-
         console.clear();
         for (let r of rates) {
-          console.log(
-            `${r.name}, last ask: ${this.changeRandom(
-              r.asks[0].price
-            )}, last bid: ${this.changeRandom(r.bids[0].price)}`
-          );
+          if (currentRates[r.name]) {
+            let rate = currentRates[r.name];
+            rate.asks.unshift(r.asks[0]);
+            rate.bids.unshift(r.bids[0]);
+
+            if (rate.asks.length > 5) {
+              rate.asks.pop();
+            }
+            if (rate.bids.length > 5) {
+              rate.bids.pop();
+            }
+
+            rate.askAcc = this.getAcceleration(rate.asks).map(c =>
+              c.toFixed(2)
+            );
+            rate.bidAcc = this.getAcceleration(rate.bids).map(c =>
+              c.toFixed(2)
+            );
+          } else {
+            currentRates[r.name] = {
+              name: r.name,
+              asks: r.asks,
+              bids: r.bids,
+              startAsk: r.asks[0],
+              startBid: r.bids[0]
+            };
+          }
         }
-        console.log("Balance", balance);
+
+        for (let key of Object.keys(currentRates)) {
+          const r = currentRates[key];
+          console.log(
+            `${r.name}, last ask: ${r.asks[0].price}, last bid: ${
+              r.bids[0].price
+            }`
+          );
+          if (r.askAcc && r.bidAcc)
+            console.log(
+              `  ask acc ${r.askAcc.slice(0, 3)}, bid acc ${r.bidAcc.slice(
+                0,
+                3
+              )}`
+            );
+
+          this.figureOutBuy(r.name, r.startAsk, r.asks);
+          this.figureOutSell(r.name, r.startBid, r.bids);
+        }
+        console.log("Balance", this.balance);
         // console.time("refreshing");
-        await sleep(20);
+        await sleep(50);
         // console.timeEnd("refreshing");
         console.log(
           "ELAPSED TIME",
           distanceInWordsStrict(new Date(), startTime)
         );
-      }
-    } catch (e) {
-      console.log(e);
-    }
-  }
-
-  async legacy() {
-    try {
-      let count = 1000;
-      var url =
-        "https://www.freeforexapi.com/api/live?pairs=" +
-        supportedPairs.slice(0, 3).join(",");
-      let rates = {};
-      let PIPS = 1000000;
-      let total = 0;
-
-      while (count--) {
-        let res = await axios.get(url);
-
-        console.clear();
-        console.log(`LAST ACTION: ${this.lastAction}`);
-        for (let key in res.data.rates) {
-          let val = res.data.rates[key];
-          let diff = 0;
-
-          if (rates[key])
-            diff = Math.abs(val.rate - rates[key].rates[0]) * PIPS;
-          console.log(
-            `GOT VAL: ${key} = ${val.rate}, PIP DIFF: ${Math.floor(diff)}`
-          );
-          let shouldBuy = 0;
-          let shouldSell = 0;
-
-          if (rates[key]) {
-            let currentRate = rates[key];
-            currentRate.rates.unshift(val.rate);
-
-            if (currentRate.rates[0] > currentRate.rates[1] + 0.001) {
-              shouldSell++;
-              if (shouldSell > 0) {
-                total += this.sell(currentRate, key);
-                shouldSell = 0;
-              }
-            } else if (currentRate.rates[0] < currentRate.rates[1] - 0.001) {
-              shouldBuy++;
-              if (shouldBuy > 0) {
-                total += this.buy(currentRate, key);
-                shouldBuy = 0;
-              }
-            }
-
-            let avg =
-              currentRate.rates.reduce((a, b) => a + b) /
-              currentRate.rates.length;
-            if (avg > currentRate.avg) {
-              currentRate.increase.unshift(
-                Math.floor(Math.abs(avg - currentRate.avg) * PIPS)
-              );
-              rates[key].decrease = [];
-              if (currentRate.increase.length > 3) {
-                currentRate.increase.pop();
-              }
-            } else if (avg < currentRate.avg - 0.001) {
-              rates[key].increase = [];
-              currentRate.decrease.unshift(
-                Math.floor(Math.abs(avg - currentRate.avg) * PIPS)
-              );
-
-              if (currentRate.decrease.length > 10) {
-                currentRate.decrease.pop();
-              }
-            } else {
-              currentRate.increase = [];
-              currentRate.decrease = [];
-            }
-            currentRate.avg = avg;
-            if (rates[key].rates.length > 10) {
-              rates[key].rates.pop();
-            }
-          } else {
-            rates[key] = {
-              avg: val.rate,
-              rates: [val.rate],
-              increase: [],
-              decrease: [],
-              startVal: val.rate
-            };
-            // kick off initial buy
-            total += this.buy(rates[key], key);
-          }
-        }
-
-        for (let key of Object.keys(rates)) {
-          let val = rates[key];
-          console.log(
-            `${key}: avg: ${val.avg.toFixed(6)}, increase: ${val.increase
-              .slice(0, 5)
-              .join(", ")}, decrease: ${val.decrease.slice(0, 5).join(", ")}`
-          );
-          console.log(
-            `   pip: ${val.rates
-              .slice(0, 3)
-              .map(m => (m % 1).toFixed(6))
-              .join(", ")}`
-          );
-          if (val.rates[10])
-            console.log(
-              `   diff pip: ${val.rates[0] * 1000000 - val.rates[4] * 1000000}`
-            );
-        }
-        console.log(
-          `count: ${count}, total: ${total}, money spent: ${this.moneySpent}`
-        );
-        // await sleep(100);
       }
     } catch (e) {
       console.log(e);
